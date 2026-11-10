@@ -1,0 +1,17 @@
+{
+  "name": "book-store-dtdc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DTDC Book Store & Courier Logistics Platform",
+  "scripts": {
+    "dev": "node dev.js",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build",
+    "build:backend": "npm --prefix backend run build",
+    "build:frontend": "npm --prefix frontend run build",
+    "start:backend": "node backend/dist/server.js",
+    "start:frontend": "npm --prefix frontend run start"
+  }
+}
+
