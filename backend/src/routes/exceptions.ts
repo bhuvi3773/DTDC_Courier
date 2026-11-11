@@ -95,7 +95,7 @@ exceptionsRouter.post(
     });
 
     if (!b.markLost) {
-      void notifyShipmentMilestone(shipment.id, 'DELIVERY_FAILED', {
+      await notifyShipmentMilestone(shipment.id, 'DELIVERY_FAILED', {
         remarks: `${b.exceptionCode}: ${b.remarks}`,
       });
     }

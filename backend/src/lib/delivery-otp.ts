@@ -98,7 +98,7 @@ export async function issueDeliveryOtp(shipmentId: string, tx?: Prisma.Transacti
     console.log(`[OTP:DELIVERY] awb=${shipment.awb} code=${code}`);
   }
   if (!tx) {
-    void notifyShipmentMilestone(shipment.id, 'OUT_FOR_DELIVERY_OTP', { code });
+    await notifyShipmentMilestone(shipment.id, 'OUT_FOR_DELIVERY_OTP', { code });
   }
   // Dev convenience: hand the code back so the recipient flow can complete.
   return { issued: true, code: isDevSms() ? code : undefined };
@@ -160,7 +160,7 @@ export async function resendDeliveryOtp(shipmentId: string): Promise<IssuedDeliv
   if (isDevSms()) {
     console.log(`[OTP:DELIVERY:RESEND] awb=${shipment.awb} code=${code}`);
   }
-  void notifyShipmentMilestone(shipment.id, 'OUT_FOR_DELIVERY_OTP', { code });
+  await notifyShipmentMilestone(shipment.id, 'OUT_FOR_DELIVERY_OTP', { code });
 
   return { issued: true, code: isDevSms() ? code : undefined };
 }

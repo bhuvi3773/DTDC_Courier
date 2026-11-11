@@ -13,6 +13,13 @@ import {
 import { getToken } from '@/lib/auth';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import {
+  MILESTONES,
+  RTO_MILESTONES,
+  computeMilestoneIndex,
+  computeRtoMilestoneIndex,
+  orderTimelineNewestFirst,
+} from '@/lib/tracking-timeline';
+import {
   Search,
   Truck,
   CheckCircle2,
@@ -25,27 +32,6 @@ import {
   CalendarClock,
   IndianRupee,
 } from 'lucide-react';
-
-const MILESTONES = [
-  { key: 'BOOKED', label: 'Booked' },
-  { key: 'PICKED_UP', label: 'Picked Up' },
-  { key: 'AT_ORIGIN_HUB', label: 'Origin Hub' },
-  { key: 'IN_TRANSIT', label: 'In Transit' },
-  { key: 'AT_DESTINATION_HUB', label: 'Dest Hub' },
-  { key: 'OUT_FOR_DELIVERY', label: 'Out for Delivery' },
-  { key: 'DELIVERED', label: 'Delivered' },
-];
-
-function computeMilestoneIndex(status: string): number {
-  const s = status.toUpperCase();
-  if (s === 'DELIVERED') return 6;
-  if (s === 'OUT_FOR_DELIVERY' || s === 'DELIVERY_FAILED') return 5;
-  if (s === 'AT_DESTINATION_HUB') return 4;
-  if (s === 'IN_TRANSIT' || s === 'RTO_IN_TRANSIT') return 3;
-  if (s === 'AT_ORIGIN_HUB') return 2;
-  if (s === 'PICKED_UP' || s === 'PICKUP_SCHEDULED' || s === 'PICKUP_FAILED') return 1;
-  return 0;
-}
 
 export default function TrackPage() {
   const session = useAuthSession();
@@ -185,7 +171,17 @@ export default function TrackPage() {
   const isOutOfDelivery = shipment?.status === 'OUT_FOR_DELIVERY';
   const isDelivered = shipment?.status === 'DELIVERED';
   const isFailed = shipment?.status === 'DELIVERY_FAILED' || shipment?.status === 'PICKUP_FAILED';
+  const isCancelledOrLost = shipment?.status === 'CANCELLED' || shipment?.status === 'LOST';
+  const isRto = Boolean(shipment?.status?.startsWith('RTO_'));
   const currentMilestone = shipment ? computeMilestoneIndex(shipment.status) : 0;
+  const currentRtoMilestone = shipment ? computeRtoMilestoneIndex(shipment.status) : 0;
+  const stepperSteps = isRto ? RTO_MILESTONES : MILESTONES;
+  const stepperIndex = isRto ? currentRtoMilestone : currentMilestone;
+  const stepperBarClass = isRto ? 'bg-amber-500' : 'bg-brand-600';
+  const stepperDotActiveClass = isRto
+    ? 'border-amber-500 bg-amber-500 text-white'
+    : 'border-brand-600 bg-brand-600 text-white';
+  const orderedTimeline = shipment ? orderTimelineNewestFirst(shipment.timeline) : [];
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
@@ -271,9 +267,9 @@ export default function TrackPage() {
                     className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${
                       isDelivered
                         ? 'bg-emerald-100 text-emerald-800'
-                        : isFailed
+                        : isFailed || isCancelledOrLost
                         ? 'bg-red-100 text-red-800'
-                        : isOutOfDelivery
+                        : isOutOfDelivery || isRto
                         ? 'bg-amber-100 text-amber-800'
                         : 'bg-brand-50 text-brand-700'
                     }`}
@@ -287,34 +283,43 @@ export default function TrackPage() {
 
               {/* Animated Visual Journey Strip */}
               <div className="mt-6 hidden sm:block">
-                <div className="relative flex items-center justify-between">
-                  <div className="absolute left-0 right-0 top-3.5 h-1 rounded-full bg-slate-100" />
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${(currentMilestone / (MILESTONES.length - 1)) * 100}%` }}
-                    transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-                    className="absolute left-0 top-3.5 h-1 rounded-full bg-brand-600"
-                  />
-                  {MILESTONES.map((m, idx) => {
-                    const active = idx <= currentMilestone;
-                    return (
-                      <div key={m.key} className="relative z-10 flex flex-col items-center">
-                        <span
-                          className={`flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-bold border-2 transition ${
-                            active
-                              ? 'border-brand-600 bg-brand-600 text-white'
-                              : 'border-slate-200 bg-white text-slate-400'
-                          }`}
-                        >
-                          {idx + 1}
-                        </span>
-                        <span className={`mt-1.5 text-[10px] font-semibold ${active ? 'text-slate-900' : 'text-slate-400'}`}>
-                          {m.label}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+                {isCancelledOrLost ? (
+                  <div className="flex items-center gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-800">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
+                    <span>
+                      {shipment.status === 'CANCELLED'
+                        ? 'This shipment has been cancelled.'
+                        : 'This shipment was marked lost during transit. Please contact Support.'}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="relative flex items-center justify-between">
+                    <div className="absolute left-0 right-0 top-3.5 h-1 rounded-full bg-slate-100" />
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(stepperIndex / (stepperSteps.length - 1)) * 100}%` }}
+                      transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                      className={`absolute left-0 top-3.5 h-1 rounded-full ${stepperBarClass}`}
+                    />
+                    {stepperSteps.map((m, idx) => {
+                      const active = idx <= stepperIndex;
+                      return (
+                        <div key={m.key} className="relative z-10 flex flex-col items-center">
+                          <span
+                            className={`flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-bold border-2 transition ${
+                              active ? stepperDotActiveClass : 'border-slate-200 bg-white text-slate-400'
+                            }`}
+                          >
+                            {idx + 1}
+                          </span>
+                          <span className={`mt-1.5 text-[10px] font-semibold ${active ? 'text-slate-900' : 'text-slate-400'}`}>
+                            {m.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="mt-6 grid grid-cols-2 gap-4 border-t border-slate-100 pt-4 sm:grid-cols-4 text-xs">
@@ -498,10 +503,10 @@ export default function TrackPage() {
               </h3>
 
               <div className="mt-6 space-y-6">
-                {shipment.timeline.map((entry, idx) => {
+                {orderedTimeline.map((entry, idx) => {
                   const isLatest = idx === 0;
                   return (
-                    <div key={idx} className="relative flex gap-4">
+                    <div key={`${entry.eventTime}-${entry.status ?? idx}`} className="relative flex gap-4">
                       <div className="flex flex-col items-center">
                         <div
                           className={`flex h-8 w-8 items-center justify-center rounded-full ${
@@ -518,7 +523,7 @@ export default function TrackPage() {
                             <Clock className="h-4 w-4" />
                           )}
                         </div>
-                        {idx !== shipment.timeline.length - 1 && (
+                        {idx !== orderedTimeline.length - 1 && (
                           <div className="w-0.5 flex-1 bg-slate-200" />
                         )}
                       </div>

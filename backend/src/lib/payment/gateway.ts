@@ -44,10 +44,8 @@ export async function createGatewayOrder(shipmentId: string): Promise<GatewayOrd
   const amountNumber = Number(shipment.financial?.customerPrice ?? 0);
   const amountPaise = Math.round(amountNumber * 100);
 
-  // Check if an existing PENDING payment with a providerOrderId can be reused
-  const existingPending = shipment.payments.find(
-    (p) => p.status === 'PENDING' && p.providerOrderId,
-  );
+  const existingPending = shipment.payments.find((p) => p.status === 'PENDING');
+  const gatewayName = activeGateway().toUpperCase();
 
   let providerOrderId = existingPending?.providerOrderId;
   if (!providerOrderId) {
@@ -55,14 +53,14 @@ export async function createGatewayOrder(shipmentId: string): Promise<GatewayOrd
     if (existingPending) {
       await prisma.payment.update({
         where: { id: existingPending.id },
-        data: { providerOrderId },
+        data: { providerOrderId, provider: gatewayName },
       });
     } else {
       await prisma.payment.create({
         data: {
           shipmentId: shipment.id,
           amount: amountNumber,
-          provider: activeGateway().toUpperCase(),
+          provider: gatewayName,
           providerOrderId,
           status: 'PENDING',
         },
@@ -173,7 +171,7 @@ export async function refundPayment(
     data: { refunded: { increment: amount } },
   });
 
-  void notifyShipmentMilestone(shipmentId, 'REFUND_ISSUED', { amount });
+  await notifyShipmentMilestone(shipmentId, 'REFUND_ISSUED', { amount });
 
   return { refunded: true, refundId: refund.id, amount };
 }

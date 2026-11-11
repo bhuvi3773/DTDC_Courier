@@ -222,12 +222,28 @@ export async function recordEvent(
       data: { status, statusUpdatedAt: input.eventTime },
     });
 
-    // 4f. Leg status updates: first event on a leg -> ACTIVE; terminal/forward -> COMPLETED.
-    if (input.legId) {
+    // 4f. Leg status updates: terminal shipment closes legs -> COMPLETED; otherwise activate leg -> ACTIVE.
+    if (isTerminal(status)) {
+      await client.shipmentLeg.updateMany({
+        where: { shipmentId: shipment.id, status: { not: 'COMPLETED' } },
+        data: { status: 'COMPLETED' },
+      });
+    } else if (input.legId) {
       await client.shipmentLeg.update({
         where: { id: input.legId },
-        data: { status: status === 'DELIVERED' ? 'COMPLETED' : 'ACTIVE' },
+        data: { status: 'ACTIVE' },
       });
+    } else if (status !== 'BOOKED') {
+      const plannedLeg = await client.shipmentLeg.findFirst({
+        where: { shipmentId: shipment.id, status: 'PLANNED' },
+        orderBy: { sequence: 'asc' },
+      });
+      if (plannedLeg) {
+        await client.shipmentLeg.update({
+          where: { id: plannedLeg.id },
+          data: { status: 'ACTIVE' },
+        });
+      }
     }
 
     // 4f-2. Close superseded/obsolete open tasks when milestones land so agent queues stay clean.
@@ -267,9 +283,9 @@ export async function recordEvent(
   }
   const result = await prisma.$transaction((t) => run(t));
 
-  // Fire Phase 8 milestone / flagged notifications asynchronously after commit.
+  // Await non-fatal notification dispatch before returning so serverless runtimes don't drop it.
   if (result.flagged) {
-    void notifyShipmentMilestone(input.shipmentId, 'EXCEPTION_FLAGGED', {
+    await notifyShipmentMilestone(input.shipmentId, 'EXCEPTION_FLAGGED', {
       remarks: input.remarks ?? `Flagged event (${input.status ?? input.rawStatus ?? 'UNKNOWN'})`,
     });
   } else if (result.applied && input.status) {
@@ -277,7 +293,7 @@ export async function recordEvent(
       input.status === 'OUT_FOR_DELIVERY' &&
       (input.source === 'PARTNER_WEBHOOK' || input.source === 'PARTNER_POLL');
     if (input.status !== 'OUT_FOR_DELIVERY' || isPartnerOfd) {
-      void notifyShipmentMilestone(input.shipmentId, input.status as NotificationTemplate, {
+      await notifyShipmentMilestone(input.shipmentId, input.status as NotificationTemplate, {
         remarks: input.remarks,
       });
     }

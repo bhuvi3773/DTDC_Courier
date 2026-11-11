@@ -326,6 +326,19 @@ test('End-to-end shipment booking with Idempotency-Key, payment, Delivery OTP, I
   });
   assert.equal(openAfterDeliver, 0, 'Delivering shipment must close all remaining open tasks');
 
+  const [paymentRows, incompleteLegs, notifRows] = await Promise.all([
+    prisma.payment.findMany({ where: { shipmentId: testShipmentId! } }),
+    prisma.shipmentLeg.count({ where: { shipmentId: testShipmentId!, status: { not: 'COMPLETED' } } }),
+    prisma.notification.findMany({ where: { shipmentId: testShipmentId! }, select: { template: true } }),
+  ]);
+  assert.equal(paymentRows.length, 1, 'Prepaid checkout must update existing PENDING row rather than duplicating');
+  assert.equal(paymentRows[0].status, 'PAID');
+  assert.equal(incompleteLegs, 0, 'Delivering shipment must close all ShipmentLeg records to COMPLETED');
+  const templates = new Set(notifRows.map((n) => n.template));
+  for (const expectedTpl of ['BOOKED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY_OTP', 'DELIVERED']) {
+    assert.ok(templates.has(expectedTpl), `Expected notification ${expectedTpl} persisted before return`);
+  }
+
   const postDeliverTask = await api('/tasks', {
     token: adminToken,
     body: { type: 'DELIVERY', shipmentId: testShipmentId },

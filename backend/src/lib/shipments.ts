@@ -287,7 +287,7 @@ export async function createShipment(input: CreateShipmentInput) {
   }
 
   if (created.shipment?.id) {
-    void notifyShipmentMilestone(created.shipment.id, 'BOOKED');
+    await notifyShipmentMilestone(created.shipment.id, 'BOOKED');
   }
   return created;
 }

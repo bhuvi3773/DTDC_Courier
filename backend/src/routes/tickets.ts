@@ -5,11 +5,19 @@ import { prisma } from '../lib/prisma';
 import { ok, handler, ApiError } from '../lib/errors';
 import { requireAuth, requireRole } from '../lib/auth';
 import { resolveShipment } from '../lib/operations';
-import { dispatchNotification } from '../lib/notifications';
+import { dispatchNotification, DispatchNotificationInput } from '../lib/notifications';
 
 export const ticketsRouter = Router();
 
 const SUPPORT_STAFF_ROLES = ['SUPER_ADMIN', 'SUPPORT', 'OPS_MANAGER', 'SUPERVISOR', 'FINANCE'] as const;
+
+async function safeTicketNotify(input: DispatchNotificationInput) {
+  try {
+    await dispatchNotification(input);
+  } catch (err) {
+    console.error('[ticket-notify] non-fatal error:', err);
+  }
+}
 
 async function getClaimWindowDays(): Promise<number> {
   const row = await prisma.pricingConfig.findUnique({ where: { key: 'CLAIM_WINDOW_DAYS' } });
@@ -224,7 +232,7 @@ ticketsRouter.post(
     });
 
     const target = req.auth.user?.phone || req.auth.user?.email || 'support@bookcourier.local';
-    void dispatchNotification({
+    await safeTicketNotify({
       shipmentId: resolvedShipmentId,
       channel: target.includes('@') ? 'EMAIL' : 'SMS',
       target,
@@ -273,7 +281,7 @@ ticketsRouter.post(
       include: { user: { select: { phone: true, email: true } } },
     });
     const target = cust?.user.phone || cust?.user.email || 'customer@bookcourier.local';
-    void dispatchNotification({
+    await safeTicketNotify({
       shipmentId: ticket.shipmentId,
       channel: target.includes('@') ? 'EMAIL' : 'SMS',
       target,
@@ -348,7 +356,7 @@ ticketsRouter.patch(
       include: { user: { select: { phone: true, email: true } } },
     });
     const target = cust?.user.phone || cust?.user.email || 'customer@bookcourier.local';
-    void dispatchNotification({
+    await safeTicketNotify({
       shipmentId: ticket.shipmentId,
       channel: target.includes('@') ? 'EMAIL' : 'SMS',
       target,
