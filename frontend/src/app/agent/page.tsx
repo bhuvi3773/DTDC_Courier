@@ -252,13 +252,28 @@ export default function AgentPortalPage() {
     }
   };
 
+  const TERMINAL_SHIPMENT_STATUSES = ['DELIVERED', 'RTO_DELIVERED', 'CANCELLED', 'LOST'];
+  const PICKUP_ELIGIBLE_STATUSES = ['BOOKED', 'PICKUP_SCHEDULED', 'PICKUP_FAILED'];
+  const DELIVERY_START_STATUSES = ['IN_TRANSIT', 'AT_DESTINATION_HUB', 'DELIVERY_FAILED'];
+
+  const isTaskActionable = (t: HydratedTask) => {
+    const shipStatus = t.shipment?.status;
+    if (shipStatus && TERMINAL_SHIPMENT_STATUSES.includes(shipStatus)) return false;
+    if (t.type === 'PICKUP' && shipStatus && !PICKUP_ELIGIBLE_STATUSES.includes(shipStatus)) {
+      return false;
+    }
+    return true;
+  };
+
   const visibleTasks = tasks.filter((t) => {
-    if (tab === 'pool') return !t.agentId && t.status === 'ASSIGNED';
+    if (tab === 'pool') return !t.agentId && t.status === 'ASSIGNED' && isTaskActionable(t);
     if (tab === 'history') return t.status === 'COMPLETED' || t.status === 'FAILED' || t.status === 'CANCELLED';
-    return t.status === 'ASSIGNED' || t.status === 'ACCEPTED' || t.status === 'IN_PROGRESS';
+    return (t.status === 'ASSIGNED' || t.status === 'ACCEPTED' || t.status === 'IN_PROGRESS') && isTaskActionable(t);
   });
 
-  const activeCount = tasks.filter((t) => ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'].includes(t.status)).length;
+  const activeCount = tasks.filter(
+    (t) => ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'].includes(t.status) && isTaskActionable(t),
+  ).length;
   const completedCount = tasks.filter((t) => t.status === 'COMPLETED').length;
 
   const effectiveOnline =
@@ -513,7 +528,10 @@ export default function AgentPortalPage() {
                   </div>
 
                   {/* Action Controls */}
-                  {t.status !== 'COMPLETED' && t.status !== 'CANCELLED' && t.status !== 'FAILED' && (
+                  {t.status !== 'COMPLETED' &&
+                    t.status !== 'CANCELLED' &&
+                    t.status !== 'FAILED' &&
+                    isTaskActionable(t) && (
                     <div className="flex flex-col items-end gap-2">
                       {(!t.agentId || t.status === 'ASSIGNED') && (
                         <button
@@ -524,7 +542,9 @@ export default function AgentPortalPage() {
                         </button>
                       )}
 
-                      {t.type === 'PICKUP' && t.agentId && (
+                      {t.type === 'PICKUP' &&
+                        t.agentId &&
+                        (!t.shipment?.status || PICKUP_ELIGIBLE_STATUSES.includes(t.shipment.status)) && (
                         <div className="flex flex-col items-end gap-2">
                           <input
                             type="text"
@@ -554,7 +574,10 @@ export default function AgentPortalPage() {
                         </div>
                       )}
 
-                      {t.type === 'DELIVERY' && t.agentId && !isOutForDelivery && (
+                      {t.type === 'DELIVERY' &&
+                        t.agentId &&
+                        t.shipment?.status &&
+                        DELIVERY_START_STATUSES.includes(t.shipment.status) && (
                         <button
                           onClick={() => handleStartDelivery(t)}
                           className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"

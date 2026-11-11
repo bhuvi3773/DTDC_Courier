@@ -4,7 +4,7 @@ import { Prisma, TaskStatus, TaskType } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { ok, handler, ApiError } from '../lib/errors';
 import { requireAuth, requireRole } from '../lib/auth';
-import { recordEvent, ALLOWED_TRANSITIONS } from '../lib/tracking';
+import { recordEvent, ALLOWED_TRANSITIONS, TERMINAL_STATUSES } from '../lib/tracking';
 import { issueDeliveryOtp, verifyDeliveryOtp, failDeliveryAttempt } from '../lib/delivery-otp';
 import { ensurePickupScheduled, hydrateTasks, resolveShipment } from '../lib/operations';
 import { idempotent } from '../middleware/idempotency';
@@ -162,6 +162,11 @@ agentRouter.post(
     const { task, agent, isStaff } = await loadOwnedTask(req, req.params.taskId);
     if (task.status === 'COMPLETED' || task.status === 'CANCELLED') {
       throw ApiError.unprocessable(`Task is already ${task.status}`, 'TASK_CLOSED');
+    }
+
+    const shipment = await prisma.shipment.findUnique({ where: { id: task.shipmentId }, select: { status: true } });
+    if (shipment && TERMINAL_STATUSES.includes(shipment.status)) {
+      throw ApiError.unprocessable(`Cannot accept task for ${shipment.status} shipment`, 'SHIPMENT_TERMINAL');
     }
 
     const bodyAgentId = (req.body as { agentId?: string } | undefined)?.agentId;

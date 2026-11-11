@@ -335,14 +335,12 @@ shipmentsRouter.post(
         eventTime: new Date(),
       });
     } else {
+      const { ensureOpenTask } = await import('../lib/operations');
       const taskType = shipment.status === 'PICKUP_FAILED' ? 'PICKUP' : 'DELIVERY';
-      await prisma.task.create({
-        data: {
-          type: taskType,
-          shipmentId: shipment.id,
-          status: 'ASSIGNED',
-          scheduledFor: rescheduleDt,
-        },
+      await ensureOpenTask({
+        type: taskType,
+        shipmentId: shipment.id,
+        scheduledFor: rescheduleDt,
       });
       await recordEvent({
         shipmentId: shipment.id,

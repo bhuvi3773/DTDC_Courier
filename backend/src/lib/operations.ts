@@ -1,8 +1,10 @@
 import { Prisma, TaskStatus, TaskType } from '@prisma/client';
 import { prisma } from './prisma';
 import { ApiError } from './errors';
-import { recordEvent, ALLOWED_TRANSITIONS } from './tracking';
+import { recordEvent, ALLOWED_TRANSITIONS, TERMINAL_STATUSES } from './tracking';
 import { issueDeliveryOtp } from './delivery-otp';
+
+export const OPEN_TASK_STATUSES: TaskStatus[] = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
 
 /**
  * Resolve a shipment by Shipment UUID, AWB string, or Package barcode (e.g. BC...-1).
@@ -165,7 +167,56 @@ export async function assignTaskToAgent(
 }
 
 /**
- * Create a new operational task for a shipment.
+ * Reuse an existing open task for `(shipmentId, type)` instead of creating
+ * duplicates, cancelling any extra stale copies found for the same tuple.
+ */
+export async function ensureOpenTask(input: {
+  type: TaskType;
+  shipmentId: string;
+  agentId?: string;
+  scheduledFor?: Date;
+}) {
+  const openTasks = await prisma.task.findMany({
+    where: {
+      shipmentId: input.shipmentId,
+      type: input.type,
+      status: { in: OPEN_TASK_STATUSES },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  if (openTasks.length > 0) {
+    let task = openTasks[0];
+    if (openTasks.length > 1) {
+      await prisma.task.updateMany({
+        where: { id: { in: openTasks.slice(1).map((t) => t.id) } },
+        data: { status: 'CANCELLED' },
+      });
+    }
+    const patch: Prisma.TaskUpdateInput = {};
+    if (input.agentId && !task.agentId) patch.agent = { connect: { id: input.agentId } };
+    if (input.scheduledFor && !task.scheduledFor) patch.scheduledFor = input.scheduledFor;
+    if (Object.keys(patch).length > 0) {
+      task = await prisma.task.update({ where: { id: task.id }, data: patch });
+    }
+    return { task, created: false };
+  }
+
+  const task = await prisma.task.create({
+    data: {
+      type: input.type,
+      shipmentId: input.shipmentId,
+      agentId: input.agentId ?? null,
+      status: 'ASSIGNED',
+      scheduledFor: input.scheduledFor ?? null,
+    },
+  });
+  return { task, created: true };
+}
+
+/**
+ * Create a new operational task for a shipment (idempotently reusing an
+ * existing open task of the same type when one already exists).
  */
 export async function createOperationalTask(input: {
   type: TaskType;
@@ -181,19 +232,35 @@ export async function createOperationalTask(input: {
   });
   if (!shipment) throw ApiError.notFound('Shipment');
 
+  if (TERMINAL_STATUSES.includes(shipment.status)) {
+    throw ApiError.unprocessable(
+      `Cannot create ${input.type} task when shipment is ${shipment.status}`,
+      'SHIPMENT_TERMINAL',
+    );
+  }
+  if (input.type === 'PICKUP' && !['BOOKED', 'PICKUP_SCHEDULED', 'PICKUP_FAILED'].includes(shipment.status)) {
+    throw ApiError.unprocessable(
+      `Cannot create PICKUP task when shipment is ${shipment.status}`,
+      'INVALID_STATUS_FOR_PICKUP_TASK',
+    );
+  }
+  if (input.type === 'DELIVERY' && ['BOOKED', 'PICKUP_SCHEDULED', 'PICKUP_FAILED'].includes(shipment.status)) {
+    throw ApiError.unprocessable(
+      `Cannot create DELIVERY task before parcel is in transit (status: ${shipment.status})`,
+      'INVALID_STATUS_FOR_DELIVERY_TASK',
+    );
+  }
+
   if (input.agentId) {
     const agent = await prisma.agent.findUnique({ where: { id: input.agentId } });
     if (!agent) throw ApiError.notFound('Agent');
   }
 
-  const task = await prisma.task.create({
-    data: {
-      type: input.type,
-      shipmentId: shipment.id,
-      agentId: input.agentId ?? null,
-      status: 'ASSIGNED',
-      scheduledFor: input.scheduledFor ?? null,
-    },
+  const { task } = await ensureOpenTask({
+    type: input.type,
+    shipmentId: shipment.id,
+    agentId: input.agentId,
+    scheduledFor: input.scheduledFor,
   });
 
   if (input.type === 'PICKUP' && input.agentId) {

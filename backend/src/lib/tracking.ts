@@ -230,6 +230,29 @@ export async function recordEvent(
       });
     }
 
+    // 4f-2. Close superseded/obsolete open tasks when milestones land so agent queues stay clean.
+    const openStatuses = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'] as const;
+    if (status === 'PICKED_UP') {
+      await client.task.updateMany({
+        where: { shipmentId: shipment.id, type: 'PICKUP', status: { in: [...openStatuses] } },
+        data: { status: 'CANCELLED' },
+      });
+    } else if (status === 'RTO_INITIATED') {
+      await client.task.updateMany({
+        where: {
+          shipmentId: shipment.id,
+          type: { in: ['PICKUP', 'DELIVERY'] },
+          status: { in: [...openStatuses] },
+        },
+        data: { status: 'CANCELLED' },
+      });
+    } else if (isTerminal(status)) {
+      await client.task.updateMany({
+        where: { shipmentId: shipment.id, status: { in: [...openStatuses] } },
+        data: { status: 'CANCELLED' },
+      });
+    }
+
     // 4g. Audit log.
     await audit(client, 'tracking.status-change', input.actorUserId ?? null, input.shipmentId, {
       before: shipment.status,

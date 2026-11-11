@@ -287,6 +287,19 @@ test('End-to-end shipment booking with Idempotency-Key, payment, Delivery OTP, I
       body: { kind: 'STATUS', status: nextStatus, remarks: `test->${nextStatus}` },
     });
     assert.equal(evRes.status, 200);
+    if (nextStatus === 'IN_TRANSIT') {
+      const t1: ApiResult<{ task: { id: string } }> = await api<{ task: { id: string } }>('/tasks', {
+        token: adminToken,
+        body: { type: 'DELIVERY', shipmentId: testShipmentId },
+      });
+      const t2: ApiResult<{ task: { id: string } }> = await api<{ task: { id: string } }>('/tasks', {
+        token: adminToken,
+        body: { type: 'DELIVERY', shipmentId: testShipmentId },
+      });
+      assert.equal(t1.status, 201);
+      assert.equal(t2.status, 201);
+      assert.equal(t1.json?.data?.task.id, t2.json?.data?.task.id, 'Duplicate open DELIVERY task must be reused');
+    }
     if (nextStatus === 'OUT_FOR_DELIVERY') {
       otpCode = evRes.json?.data?.deliveryOtp?.code;
     }
@@ -307,6 +320,17 @@ test('End-to-end shipment booking with Idempotency-Key, payment, Delivery OTP, I
   });
   assert.equal(goodVerify.status, 200);
   assert.equal(goodVerify.json?.data?.status, 'DELIVERED');
+
+  const openAfterDeliver = await prisma.task.count({
+    where: { shipmentId: testShipmentId!, status: { in: ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'] } },
+  });
+  assert.equal(openAfterDeliver, 0, 'Delivering shipment must close all remaining open tasks');
+
+  const postDeliverTask = await api('/tasks', {
+    token: adminToken,
+    body: { type: 'DELIVERY', shipmentId: testShipmentId },
+  });
+  assert.equal(postDeliverTask.status, 422, 'Creating a task on a DELIVERED shipment must return 422');
 
   // 6. Invoice PDF & Reports CSV export
   const invoicePdf = await api(`/shipments/${testShipmentId}/invoice`, { token: customerToken });
@@ -562,6 +586,11 @@ test('DTDC/Delhivery Parity: Separated Partner Couriers, Promo SHIP25, Internati
   });
   assert.equal(cancelRes.status, 200);
   assert.equal(cancelRes.json?.data?.shipment.status, 'CANCELLED');
+
+  const openAfterCancel = await prisma.task.count({
+    where: { shipmentId: testExtraShipmentId!, status: { in: ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'] } },
+  });
+  assert.equal(openAfterCancel, 0, 'Cancelling shipment must close open pickup tasks');
 
   const inqRes = await api<{ id: string }>('/inquiries', {
     token: customerToken,
