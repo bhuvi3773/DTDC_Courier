@@ -54,6 +54,10 @@ export function useAuthSession(opts: { redirectIfUnauth?: boolean } = {}): AuthS
 
     try {
       const me = await getMe(t);
+      const latestToken = getToken();
+      if (latestToken && latestToken !== t) {
+        setToken(latestToken);
+      }
       setRole(me.role);
       setUser(me.user);
       setCachedSession({ role: me.role, user: me.user }, true);

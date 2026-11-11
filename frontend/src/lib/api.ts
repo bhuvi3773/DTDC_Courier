@@ -1,3 +1,5 @@
+import { clearToken, getCachedSession, getRefreshToken, getToken, setToken } from './auth';
+
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
 
 export function apiUrl(path: string): string {
@@ -10,20 +12,98 @@ export class ApiClientError extends Error {
   }
 }
 
+let refreshInFlight: Promise<string | null> | null = null;
+
+/**
+ * Exchange the stored refresh token for a fresh access + refresh pair using a
+ * single-flight lock so concurrent 401s do not collide on one-time token rotation.
+ */
+async function refreshAccessToken(staleToken?: string): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+
+  const current = getToken();
+  if (current && staleToken && current !== staleToken) {
+    return current;
+  }
+
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    const rt = getRefreshToken();
+    if (!rt) {
+      if (staleToken) clearToken();
+      return null;
+    }
+
+    try {
+      const res = await fetch(apiUrl('/auth/refresh'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: rt }),
+        cache: 'no-store',
+      });
+
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          clearToken();
+        }
+        return null;
+      }
+
+      const json = (await res.json().catch(() => null)) as {
+        data?: { accessToken?: string; refreshToken?: string };
+      } | null;
+      const accessToken = json?.data?.accessToken;
+      const refreshToken = json?.data?.refreshToken;
+      if (!accessToken) return null;
+
+      setToken(accessToken, getCachedSession() ?? undefined, refreshToken);
+      return accessToken;
+    } catch {
+      return null;
+    }
+  })().finally(() => {
+    refreshInFlight = null;
+  });
+
+  return refreshInFlight;
+}
+
+async function fetchWithAuthRetry(
+  path: string,
+  opts: { method?: string; body?: unknown; token?: string } = {},
+): Promise<Response> {
+  const url = apiUrl(path);
+  const doFetch = (authToken?: string) => {
+    const headers: Record<string, string> = {};
+    if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    return fetch(url, {
+      method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
+      headers,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      cache: 'no-store',
+    });
+  };
+
+  let res = await doFetch(opts.token);
+  if (res.status === 401 && opts.token && !path.startsWith('/auth/refresh')) {
+    const refreshed = await refreshAccessToken(opts.token);
+    if (refreshed) {
+      res = await doFetch(refreshed);
+      if (res.status === 401) {
+        clearToken();
+      }
+    }
+  }
+  return res;
+}
+
 export async function apiFetch<T>(
   path: string,
   opts: { method?: string; body?: unknown; token?: string } = {},
 ): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`;
-
-  const res = await fetch(apiUrl(path), {
-    method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
-    headers,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    cache: 'no-store',
-  });
+  const res = await fetchWithAuthRetry(path, opts);
 
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -854,9 +934,7 @@ export const closeManifest = (manifestId: string, token: string) =>
 // ---------- Phase 4 & 9: Authenticated Blob Downloads, Saved Addresses & Admin ----------
 
 export async function downloadAuthenticatedBlob(path: string, filename: string, token: string) {
-  const res = await fetch(apiUrl(path), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await fetchWithAuthRetry(path, { token });
   if (!res.ok) {
     const errJson = await res.json().catch(() => ({}));
     throw new ApiClientError(res.status, errJson.code ?? 'DOWNLOAD_ERROR', errJson.message ?? 'Download failed');

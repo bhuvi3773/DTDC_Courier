@@ -114,6 +114,7 @@ export default function AdminPage() {
   const [shipments, setShipments] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [loadingShipments, setLoadingShipments] = useState(false);
+  const [busyTaskShipmentId, setBusyTaskShipmentId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -297,23 +298,27 @@ export default function AdminPage() {
 
   // Phase 5: Create & dispatch Delivery Task
   const handleCreateTask = async (type: 'PICKUP' | 'DELIVERY', shipmentId: string, dispatchNow = false) => {
-    if (!token) return;
+    if (!token || busyTaskShipmentId === shipmentId) return;
+    setBusyTaskShipmentId(shipmentId);
     setError(null);
     setMessage(null);
     try {
-      const defaultAgentId = agents.find((a) => a.isOnline)?.id || agents[0]?.id;
+      const chosenAgent = agents.find((a) => a.isOnline) || agents[0];
       const res = await createTask(
-        { type, shipmentId, agentId: defaultAgentId, dispatchNow },
+        { type, shipmentId, agentId: chosenAgent?.id, dispatchNow },
         token,
       );
+      const agentLabel = chosenAgent ? ` → assigned to ${chosenAgent.name}` : '';
       if (res.deliveryOtp?.code) {
-        setMessage(`${type} task created & dispatched! Customer OTP: ${res.deliveryOtp.code}`);
+        setMessage(`${type} task created & dispatched${agentLabel}! Customer OTP: ${res.deliveryOtp.code}`);
       } else {
-        setMessage(`${type} task created!`);
+        setMessage(`${type} task created${agentLabel}!`);
       }
       await loadAll(token);
     } catch (err: any) {
       setError(err?.message || `Failed to create ${type} task`);
+    } finally {
+      setBusyTaskShipmentId(null);
     }
   };
 
@@ -608,15 +613,33 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {/* Notifications */}
-      {message && (
-        <div className="mt-4 rounded-lg bg-emerald-50 p-3 text-xs font-semibold text-emerald-800 border border-emerald-200">
-          {message}
-        </div>
-      )}
-      {error && (
-        <div className="mt-4 rounded-lg bg-red-50 p-3 text-xs font-semibold text-red-700 border border-red-200">
-          {error}
+      {/* Notifications (sticky below navbar so scrolled table errors/OTPs stay visible) */}
+      {(message || error) && (
+        <div className="sticky top-20 z-30 mt-4 space-y-2">
+          {message && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/95 p-3 text-xs font-semibold text-emerald-800 shadow-md backdrop-blur">
+              <span>{message}</span>
+              <button
+                type="button"
+                onClick={() => setMessage(null)}
+                className="rounded px-1.5 py-0.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+          {error && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50/95 p-3 text-xs font-semibold text-red-700 shadow-md backdrop-blur">
+              <span>{error}</span>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="rounded px-1.5 py-0.5 text-[11px] font-bold text-red-700 hover:bg-red-100"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -948,10 +971,11 @@ export default function AdminPage() {
                         {['BOOKED', 'PICKUP_FAILED'].includes(s.status) && (
                           <button
                             type="button"
+                            disabled={busyTaskShipmentId === s.id}
                             onClick={() => handleCreateTask('PICKUP', s.id)}
-                            className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                            className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
                           >
-                            + Assign Pickup
+                            {busyTaskShipmentId === s.id ? 'Creating...' : '+ Assign Pickup'}
                           </button>
                         )}
 
@@ -960,10 +984,12 @@ export default function AdminPage() {
                           <>
                             <button
                               type="button"
+                              disabled={busyTaskShipmentId === s.id}
                               onClick={() => handleCreateTask('DELIVERY', s.id, true)}
-                              className="flex items-center gap-1 rounded bg-slate-800 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-slate-900"
+                              className="flex items-center gap-1 rounded bg-slate-800 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-slate-900 disabled:opacity-50"
                             >
-                              <Send className="h-3 w-3" /> Dispatch OFD
+                              <Send className="h-3 w-3" />{' '}
+                              {busyTaskShipmentId === s.id ? 'Dispatching...' : 'Dispatch OFD'}
                             </button>
                           </>
                         )}
